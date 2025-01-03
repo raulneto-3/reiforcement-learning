@@ -1,88 +1,27 @@
 import os
-import gc
+import numpy as np
 import random
 import torch
-import numpy as np
 import torch.nn as nn
-import gymnasium as gym
 import torch.optim as optim
 from collections import deque
 import matplotlib.pyplot as plt
-from gymnasium import spaces
 import pygame
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-gc.collect()
-torch.cuda.empty_cache()
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1' # Used for debugging; CUDA related errors shown immediately.
-
-# Seed everything for reproducible results
-seed = 2024
-np.random.seed(seed)
-os.environ['PYTHONHASHSEED'] = str(seed)
-torch.manual_seed(seed)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-class MazeEnv(gym.Env):
-    def __init__(self, maze):
-        super(MazeEnv, self).__init__()
-        self.maze = maze
-        self.start_pos = (0, 0)
-        self.goal_pos = (len(maze) - 1, len(maze[0]) - 1)
-        self.current_pos = self.start_pos
-        self.action_space = spaces.Discrete(4)  # 4 actions: up, down, left, right
-        self.observation_space = spaces.Box(low=0, high=1, shape=(len(maze), len(maze[0])), dtype=np.float32)
-        self.reset()
-        self.window_size = 600
-        self.cell_size = self.window_size // len(maze)
-        pygame.init()
-        self.screen = pygame.display.set_mode((self.window_size, self.window_size))
-        pygame.display.set_caption("Maze")
-
-    def reset(self):
-        self.current_pos = self.start_pos
-        return self._get_obs()
-
-    def step(self, action):
-        next_pos = self._move(action)
-        if self._is_valid(next_pos):
-            self.current_pos = next_pos
-
-        reward = 1 if self.current_pos == self.goal_pos else -0.1
-        done = self.current_pos == self.goal_pos
-        return self._get_obs(), reward, done, False, {}
-
-    def render(self, mode='human'):
-        self.screen.fill((255, 255, 255))
-        for row in range(len(self.maze)):
-            for col in range(len(self.maze[0])):
-                color = (0, 0, 255) if self.maze[row, col] == 1 else (255, 255, 255)
-                pygame.draw.rect(self.screen, color, pygame.Rect(col * self.cell_size, row * self.cell_size, self.cell_size, self.cell_size))
-        pygame.draw.rect(self.screen, (0, 255, 0), pygame.Rect(self.goal_pos[1] * self.cell_size, self.goal_pos[0] * self.cell_size, self.cell_size, self.cell_size))
-        pygame.draw.circle(self.screen, (255, 0, 0), (self.current_pos[1] * self.cell_size + self.cell_size // 2, self.current_pos[0] * self.cell_size + self.cell_size // 2), self.cell_size // 3)
-        pygame.display.flip()
-
-    def _get_obs(self):
-        obs = np.zeros_like(self.maze, dtype=np.float32)
-        obs[self.current_pos] = 1
-        return obs
-
-    def _move(self, action):
-        if action == 0:  # up
-            return (self.current_pos[0] - 1, self.current_pos[1])
-        elif action == 1:  # down
-            return (self.current_pos[0] + 1, self.current_pos[1])
-        elif action == 2:  # left
-            return (self.current_pos[0], self.current_pos[1] - 1)
-        elif action == 3:  # right
-            return (self.current_pos[0], self.current_pos[1] + 1)
-
-    def _is_valid(self, pos):
-        return (0 <= pos[0] < len(self.maze)) and (0 <= pos[1] < len(self.maze[0])) and (self.maze[pos] == 0)
+class QNetwork(nn.Module):
+    def __init__(self, state_size, action_size):
+        super(QNetwork, self).__init__()
+        self.fc1 = nn.Linear(state_size, 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.fc3 = nn.Linear(64, action_size)
+        
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
 
 class ReplayMemory:
     def __init__(self, capacity):
@@ -105,21 +44,7 @@ class ReplayMemory:
     def __len__(self):
         return len(self.memory)
 
-class DQN_Network(nn.Module):
-    def __init__(self, state_size, action_size):
-        super(DQN_Network, self).__init__()
-        self.fc1 = nn.Linear(state_size, 64)
-        self.fc2 = nn.Linear(64, 64)
-        self.fc3 = nn.Linear(64, action_size)
-        
-    def forward(self, x):
-        x = x.view(x.size(0), -1)  # Achatar a entrada
-        x = torch.relu(self.fc1(x))
-        x = torch.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
-
-class DQN_Agent:
+class QLearningAgent:
     def __init__(self, state_size, action_size, epsilon_max, epsilon_min, epsilon_decay, 
                  learning_rate, discount, memory_capacity):
         self.state_size = state_size
@@ -129,8 +54,8 @@ class DQN_Agent:
         self.epsilon_decay = epsilon_decay
         self.discount = discount
         self.memory = ReplayMemory(memory_capacity)
-        self.policy_net = DQN_Network(state_size, action_size).to(device)
-        self.target_net = DQN_Network(state_size, action_size).to(device)
+        self.policy_net = QNetwork(state_size, action_size).to(device)
+        self.target_net = QNetwork(state_size, action_size).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=learning_rate)
@@ -174,15 +99,16 @@ class DQN_Agent:
         self.policy_net.load_state_dict(torch.load(path))
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
-def train_agent(env, agent, num_episodes, batch_size, target_update):
+def train_agent(agent, mazes, num_episodes, batch_size, target_update):
     rewards = []
     for episode in range(num_episodes):
-        state = env.reset()
+        maze = random.choice(mazes)
+        state = (0, 0)
         total_reward = 0
         done = False
         while not done:
             action = agent.select_action(state)
-            next_state, reward, done, _, _ = env.step(action)
+            next_state, reward, done = step(maze, state, action)
             agent.memory.store(state, action, next_state, reward, done)
             agent.learn(batch_size)
             state = next_state
@@ -195,55 +121,95 @@ def train_agent(env, agent, num_episodes, batch_size, target_update):
             print(f'Episode {episode}, Total Reward: {total_reward}, Epsilon: {agent.epsilon:.2f}')
     return rewards
 
-def test_agent(env, agent, num_episodes):
-    agent.policy_net.eval()
-    total_rewards = []
+def step(maze, state, action):
+    x, y = state
+    if action == 0:  # up
+        x = max(x - 1, 0)
+    elif action == 1:  # right
+        y = min(y + 1, maze.shape[1] - 1)
+    elif action == 2:  # down
+        x = min(x + 1, maze.shape[0] - 1)
+    elif action == 3:  # left
+        y = max(y - 1, 0)
+    
+    next_state = (x, y)
+    if maze[next_state] == 1:
+        return state, -1, False  # hit a wall
+    if next_state == (maze.shape[0] - 1, maze.shape[1] - 1):
+        return next_state, 10, True  # reached the goal
+    return next_state, -0.1, False  # valid move
+
+def load_mazes(directory):
+    mazes = []
+    for filename in os.listdir(directory):
+        if filename.endswith('.npy'):
+            maze = np.load(os.path.join(directory, filename))
+            mazes.append(maze)
+    return mazes
+
+def render_maze(screen, maze, state, cell_size=20):
+    colors = {
+        0: (255, 255, 255),  # path
+        1: (0, 0, 0),        # wall
+        'agent': (0, 0, 255),# agent
+        'goal': (0, 255, 0)  # goal
+    }
+    for x in range(maze.shape[0]):
+        for y in range(maze.shape[1]):
+            color = colors[maze[x, y]]
+            pygame.draw.rect(screen, color, pygame.Rect(y * cell_size, x * cell_size, cell_size, cell_size))
+    agent_x, agent_y = state
+    pygame.draw.rect(screen, colors['agent'], pygame.Rect(agent_y * cell_size, agent_x * cell_size, cell_size, cell_size))
+    goal_x, goal_y = maze.shape[0] - 1, maze.shape[1] - 1
+    pygame.draw.rect(screen, colors['goal'], pygame.Rect(goal_y * cell_size, goal_x * cell_size, cell_size, cell_size))
+    pygame.display.flip()
+
+def test_agent(agent, mazes, num_episodes):
+    pygame.init()
+    cell_size = 20
+    screen = pygame.display.set_mode((mazes[0].shape[1] * cell_size, mazes[0].shape[0] * cell_size))
+    pygame.display.set_caption('Maze Navigation')
+    
     for episode in range(num_episodes):
-        state = env.reset()
+        maze = random.choice(mazes)
+        state = (0, 0)
         total_reward = 0
         done = False
         while not done:
-            env.render()
-            state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
-            with torch.no_grad():
-                action = agent.policy_net(state).argmax().item()
-            next_state, reward, done, _, _ = env.step(action)
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    return
+            render_maze(screen, maze, state, cell_size)
+            action = agent.select_action(state)
+            next_state, reward, done = step(maze, state, action)
             state = next_state
             total_reward += reward
-        total_rewards.append(total_reward)
+            pygame.time.wait(100)
         print(f'Episode {episode}, Total Reward: {total_reward}')
-    env.close()
-    return total_rewards
+    pygame.quit()
 
 if __name__ == '__main__':
-    # Define the maze (0 = free space, 1 = wall)
-    maze = np.array([
-        [0, 1, 0, 0, 0],
-        [0, 1, 0, 1, 0],
-        [0, 0, 0, 1, 0],
-        [0, 1, 0, 1, 0],
-        [0, 0, 0, 1, 0]
-    ])
+    directory = 'mazes'
+    mazes = load_mazes(directory)
+    state_size = 2  # (x, y) position
+    action_size = 4  # up, right, down, left
     
-    env = MazeEnv(maze)
-    state_size = env.observation_space.shape[0] * env.observation_space.shape[1]
-    action_size = env.action_space.n
-    
-    agent = DQN_Agent(state_size, action_size, epsilon_max=1.0, epsilon_min=0.01, epsilon_decay=0.995, 
-                      learning_rate=0.001, discount=0.99, memory_capacity=10000)
+    agent = QLearningAgent(state_size, action_size, epsilon_max=1.0, epsilon_min=0.01, epsilon_decay=0.995, 
+                           learning_rate=0.001, discount=0.99, memory_capacity=10000)
     
     num_episodes = 500
     batch_size = 64
     target_update = 10
     
-    # rewards = train_agent(env, agent, num_episodes, batch_size, target_update)
-    # agent.save('maze_dqn.pth')
+    rewards = train_agent(agent, mazes, num_episodes, batch_size, target_update)
+    agent.save('maze_agent.pth')
     
-    agent.load('maze_dqn.pth')
-    test_rewards = test_agent(env, agent, num_episodes=10)
+    plt.plot(rewards)
+    plt.xlabel('Episode')
+    plt.ylabel('Total Reward')
+    plt.title('Training Rewards')
+    plt.show()
     
-    # plt.plot(rewards)
-    # plt.xlabel('Episode')
-    # plt.ylabel('Total Reward')
-    # plt.title('Training Rewards')
-    # plt.show()
+    agent.load('maze_agent.pth')
+    test_agent(agent, mazes, num_episodes=10)
