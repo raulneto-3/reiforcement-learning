@@ -11,7 +11,7 @@ Projeto 2: Treinar um agente para jogar o jogo de CartPole.
 Projeto 3: Criar um agente que navegue em um labirinto.
 
 Nível 3: Deep Reinforcement Learning
-Projeto 1: Utilizar DQN para jogar Atari Games.
+Projeto 1: Criar um agente DQN para jogar Mario.
 Projeto 2: Implementar um agente PPO para um ambiente contínuo.
 Projeto 3: Criar um agente A2C para um problema multiagente.
 
