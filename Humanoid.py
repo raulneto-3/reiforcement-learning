@@ -140,7 +140,7 @@ def test_agent(env, agent, num_episodes, max_timesteps):
 
 if __name__ == '__main__':
     env = gym.make('Humanoid-v4', render_mode='human')
-    env.env.model.opt.timestep = 0.0005
+    # env.env.model.opt.timestep = 0.0005
 
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
