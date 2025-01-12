@@ -181,7 +181,25 @@ class Model_TrainTest:
     def train(self): 
         total_steps = 0
         self.reward_history = []
+        
+        train_maps = [
+            ["SFFF", "HFFF", "HFHH", "HFFG"],
+            ["SFFF", "FHFH", "FHFF", "HFFG"],
+            ["SHHH", "FHFF", "FFFF", "HFFG"],
+            ["SFFH", "FHFF", "FFFF", "HFFG"],
+            ["SFHH", "FHFF", "FFFF", "HHHG"],
+        ]
+        
         for episode in range(1, self.max_episodes+1):
+            map_layout = train_maps[np.random.choice(len(train_maps))]
+            self.env = gym.make('FrozenLake-v1', desc=map_layout, 
+                                is_slippery=False, max_episode_steps=self.max_steps, 
+                                render_mode="human" if self.render else None)
+            self.env.metadata['render_fps'] = self.render_fps
+            self.agent.action_space = self.env.action_space
+            self.agent.observation_space = self.env.observation_space
+            self.num_states = self.env.observation_space.n
+
             state, _ = self.env.reset(seed=seed)
             state = self.state_preprocess(state, num_states=self.num_states)
             done = False
@@ -205,8 +223,6 @@ class Model_TrainTest:
             self.agent.update_epsilon()
             if episode % self.save_interval == 0:
                 self.agent.save(self.save_path + '_' + f'{episode}' + '.pth')
-                if episode != self.max_episodes:
-                    self.plot_training(episode)
                 print('\n~~~~~~Interval Save: Model saved.\n')
             result = (f"Episode: {episode}, "
                       f"Total Steps: {total_steps}, "
@@ -219,7 +235,22 @@ class Model_TrainTest:
     def test(self, max_episodes):  
         self.agent.main_network.load_state_dict(torch.load(self.RL_load_path))
         self.agent.main_network.eval()
-        for episode in range(1, max_episodes+1):         
+        
+        test_maps = [
+            ["SFHH", "FFFH", "FHHH", "FFFG"],
+            ["SFFH", "FFFF", "FHHF", "HHHG"]
+        ]
+        
+        for episode in range(1, max_episodes+1):
+            map_layout = test_maps[np.random.choice(len(test_maps))]
+            self.env = gym.make('FrozenLake-v1', desc=map_layout, 
+                                is_slippery=False, max_episode_steps=self.max_steps, 
+                                render_mode="human" if self.render else None)
+            self.env.metadata['render_fps'] = self.render_fps
+            self.agent.action_space = self.env.action_space
+            self.agent.observation_space = self.env.observation_space
+            self.num_states = self.env.observation_space.n
+
             state, _ = self.env.reset(seed=seed)
             done = False
             truncation = False
@@ -274,7 +305,7 @@ if __name__ == '__main__':
         "train_mode"            : train_mode,
         "RL_load_path"          : f'./{map_size}x{map_size}/final_weights' + '_' + '3000' + '.pth',
         "save_path"             : f'./{map_size}x{map_size}/final_weights',
-        "save_interval"         : 500,
+        "save_interval"         : 1000,
         "clip_grad_norm"        : 3,
         "learning_rate"         : 6e-4,
         "discount_factor"       : 0.93,
